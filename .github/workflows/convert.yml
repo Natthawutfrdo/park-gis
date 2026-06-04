@@ -1,0 +1,78 @@
+name: 🗺️ แปลง Shapefile และอัปโหลด Supabase
+
+on:
+  push:
+    paths:
+      - 'data/shapefiles/**'
+  workflow_dispatch:        # รันมือได้จาก GitHub UI
+
+jobs:
+  convert-and-upload:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # ── 1. Checkout โค้ด ──────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true           # ดึงไฟล์ Git LFS ด้วย
+
+      # ── 2. ติดตั้ง GDAL (ogr2ogr) ────────────────────────────
+      - name: ติดตั้ง GDAL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gdal-bin libgdal-dev python3-gdal
+
+      # ── 3. ติดตั้ง tippecanoe (สร้าง Vector Tiles) ───────────
+      - name: ติดตั้ง tippecanoe
+        run: |
+          sudo apt-get install -y build-essential libsqlite3-dev zlib1g-dev
+          git clone https://github.com/felt/tippecanoe.git /tmp/tippecanoe
+          cd /tmp/tippecanoe && make -j && sudo make install
+
+      # ── 4. ติดตั้ง Python packages ────────────────────────────
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: ติดตั้ง Python dependencies
+        run: pip install -r scripts/requirements.txt
+
+      # ── 5. แปลง Shapefile → GeoJSON ──────────────────────────
+      - name: แปลง SHP → GeoJSON
+        run: python scripts/convert.py
+
+      # ── 6. สร้าง PMTiles (Vector Tiles) ──────────────────────
+      - name: สร้าง PMTiles
+        run: |
+          mkdir -p data/pmtiles
+          for f in data/geojson/*.geojson; do
+            name=$(basename "$f" .geojson)
+            echo "🔧 สร้าง tiles: $name"
+            tippecanoe \
+              --output="data/pmtiles/${name}.pmtiles" \
+              --force \
+              --maximum-zoom=16 \
+              --minimum-zoom=5 \
+              --drop-densest-as-needed \
+              --extend-zooms-if-still-dropping \
+              "$f"
+          done
+
+      # ── 7. อัปโหลดขึ้น Supabase ──────────────────────────────
+      - name: อัปโหลดข้อมูลขึ้น Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/upload_supabase.py
+
+      # ── 8. Commit ผลลัพธ์กลับ repo ───────────────────────────
+      - name: Commit GeoJSON กลับ repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/geojson/ data/pmtiles/
+          git diff --staged --quiet || git commit -m "auto: แปลง shapefile $(date '+%Y-%m-%d %H:%M')"
+          git push
