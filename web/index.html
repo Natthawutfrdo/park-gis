@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ระบบแผนที่ GIS — กรมอุทยานแห่งชาติ สัตว์ป่า และพันธุ์พืช</title>
+
+  <!-- MapLibre GL JS -->
+  <link href="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.css" rel="stylesheet"/>
+  <script src="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.js"></script>
+
+  <!-- PMTiles Protocol -->
+  <script src="https://unpkg.com/pmtiles@3.0.6/dist/pmtiles.js"></script>
+
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+
+  <style>
+    /* ─── Variables ─────────────────────────────────────────── */
+    :root {
+      --bg:        #0d1117;
+      --panel:     #161b22;
+      --panel2:    #1c2330;
+      --border:    #30363d;
+      --text:      #e6edf3;
+      --text2:     #8b949e;
+      --text3:     #6e7681;
+      --green:     #3fb950;
+      --green2:    #238636;
+      --teal:      #39d0a8;
+      --amber:     #d29922;
+      --red:       #da3633;
+      --accent:    #58a6ff;
+      --radius:    8px;
+      --panel-w:   320px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Sarabun', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100dvh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ─── Top Bar ───────────────────────────────────────────── */
+    #topbar {
+      height: 52px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 12px;
+      flex-shrink: 0;
+      z-index: 100;
+    }
+
+    .logo-mark {
+      width: 32px; height: 32px;
+      background: linear-gradient(135deg, #1a7a4a 0%, #3fb950 100%);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; flex-shrink: 0;
+    }
+
+    #topbar h1 {
+      font-size: 14px; font-weight: 600; color: var(--text);
+      white-space: nowrap;
+    }
+
+    #topbar .sub {
+      font-size: 12px; color: var(--text2); font-weight: 400;
+    }
+
+    .topbar-right {
+      margin-left: auto;
+      display: flex; gap: 8px; align-items: center;
+    }
+
+    .badge {
+      font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+      background: var(--panel2); border: 1px solid var(--border);
+      color: var(--text2); padding: 3px 8px; border-radius: 20px;
+    }
+
+    .badge.live { border-color: var(--green2); color: var(--green); }
+    .badge.live::before {
+      content: '●'; margin-right: 5px; animation: blink 2s infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    /* ─── Layout ────────────────────────────────────────────── */
+    #app {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    #map { flex: 1; }
+
+    /* ─── Left Panel ────────────────────────────────────────── */
+    #panel {
+      width: var(--panel-w);
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .panel-section {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .panel-section h3 {
+      font-size: 11px; font-weight: 600;
+      color: var(--text3); letter-spacing: .06em;
+      text-transform: uppercase; margin-bottom: 10px;
+    }
+
+    /* Search */
+    #search-wrap {
+      position: relative;
+    }
+
+    #search {
+      width: 100%;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: 'Sarabun', sans-serif;
+      font-size: 13px;
+      padding: 8px 12px 8px 34px;
+      outline: none;
+      transition: border-color .2s;
+    }
+
+    #search:focus { border-color: var(--accent); }
+    #search-icon {
+      position: absolute; left: 10px; top: 50%;
+      transform: translateY(-50%);
+      color: var(--text3); font-size: 14px; pointer-events: none;
+    }
+
+    /* Layer toggles */
+    .layer-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 0; cursor: pointer;
+      border-radius: var(--radius);
+      transition: background .15s;
+    }
+
+    .layer-item:hover { background: var(--panel2); padding-left: 6px; margin-left: -6px; }
+
+    .layer-dot {
+      width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0;
+    }
+
+    .layer-label { font-size: 13px; flex: 1; }
+    .layer-count { font-size: 11px; color: var(--text3); font-family: 'IBM Plex Mono', monospace; }
+
+    .toggle {
+      width: 32px; height: 18px;
+      background: var(--border);
+      border-radius: 9px; position: relative;
+      transition: background .2s; cursor: pointer; flex-shrink: 0;
+    }
+    .toggle.on { background: var(--green2); }
+    .toggle::after {
+      content: '';
+      position: absolute; top: 2px; left: 2px;
+      width: 14px; height: 14px;
+      background: #fff; border-radius: 50%;
+      transition: transform .2s;
+    }
+    .toggle.on::after { transform: translateX(14px); }
+
+    /* Stats */
+    .stat-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .stat-card {
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+    }
+
+    .stat-card .val {
+      font-size: 18px; font-weight: 700;
+      color: var(--teal); font-family: 'IBM Plex Mono', monospace;
+    }
+
+    .stat-card .lbl {
+      font-size: 11px; color: var(--text2); margin-top: 2px;
+    }
+
+    /* Feature info */
+    #feature-info {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 16px;
+    }
+
+    #feature-info::-webkit-scrollbar { width: 4px; }
+    #feature-info::-webkit-scrollbar-track { background: transparent; }
+    #feature-info::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .info-placeholder {
+      color: var(--text3); font-size: 13px; text-align: center;
+      margin-top: 40px; line-height: 1.7;
+    }
+
+    .prop-row {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      padding: 7px 0;
+      gap: 8px;
+    }
+
+    .prop-key {
+      font-size: 11px; color: var(--text3);
+      font-family: 'IBM Plex Mono', monospace;
+      min-width: 110px; flex-shrink: 0; padding-top: 1px;
+    }
+
+    .prop-val {
+      font-size: 13px; color: var(--text); word-break: break-word;
+    }
+
+    .info-title {
+      font-size: 15px; font-weight: 600;
+      margin-bottom: 12px; color: var(--text);
+      padding-bottom: 10px; border-bottom: 1px solid var(--border);
+    }
+
+    /* Filter bar */
+    .filter-wrap {
+      display: flex; gap: 6px; flex-wrap: wrap;
+    }
+
+    .filter-btn {
+      font-family: 'Sarabun', sans-serif;
+      font-size: 12px;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      color: var(--text2);
+      padding: 4px 10px; border-radius: 20px;
+      cursor: pointer; transition: all .15s;
+    }
+
+    .filter-btn:hover, .filter-btn.active {
+      background: var(--green2);
+      border-color: var(--green);
+      color: #fff;
+    }
+
+    /* ─── Map controls ──────────────────────────────────────── */
+    .maplibregl-ctrl-group {
+      background: var(--panel) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: var(--radius) !important;
+    }
+
+    .maplibregl-ctrl button {
+      background: transparent !important;
+      color: var(--text2) !important;
+    }
+
+    /* ─── Popup ─────────────────────────────────────────────── */
+    .maplibregl-popup-content {
+      background: var(--panel) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: var(--radius) !important;
+      color: var(--text) !important;
+      font-family: 'Sarabun', sans-serif !important;
+      font-size: 13px !important;
+      padding: 12px !important;
+      min-width: 180px;
+    }
+
+    .maplibregl-popup-tip { border-top-color: var(--panel) !important; }
+
+    /* ─── Loading overlay ───────────────────────────────────── */
+    #loading {
+      position: fixed; inset: 0;
+      background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: 16px; z-index: 9999;
+      transition: opacity .5s;
+    }
+
+    #loading.hidden { opacity: 0; pointer-events: none; }
+
+    .loader-ring {
+      width: 48px; height: 48px;
+      border: 3px solid var(--border);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #loading p { font-size: 14px; color: var(--text2); }
+
+    /* ─── Scale control ─────────────────────────────────────── */
+    .maplibregl-ctrl-scale {
+      background: var(--panel) !important;
+      border-color: var(--text3) !important;
+      color: var(--text2) !important;
+      font-family: 'IBM Plex Mono', monospace !important;
+      font-size: 10px !important;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loading">
+  <div class="loader-ring"></div>
+  <p>กำลังโหลดระบบแผนที่...</p>
+</div>
+
+<!-- Top bar -->
+<div id="topbar">
+  <div class="logo-mark">🌿</div>
+  <div>
+    <div id="topbar" style="display:contents">
+      <h1>ระบบแผนที่ GIS</h1>
+      <span class="sub"> — กรมอุทยานแห่งชาติ สัตว์ป่า และพันธุ์พืช</span>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span class="badge live" id="conn-badge">เชื่อมต่อแล้ว</span>
+    <span class="badge" id="zoom-badge">Zoom: 6</span>
+    <span class="badge" id="coord-badge">—</span>
+  </div>
+</div>
+
+<!-- Main app -->
+<div id="app">
+
+  <!-- Left panel -->
+  <div id="panel">
+
+    <!-- Search -->
+    <div class="panel-section">
+      <div id="search-wrap">
+        <span id="search-icon">🔍</span>
+        <input id="search" type="text" placeholder="ค้นหาอุทยาน, จังหวัด..."/>
+      </div>
+    </div>
+
+    <!-- Filter -->
+    <div class="panel-section">
+      <h3>ประเภทพื้นที่</h3>
+      <div class="filter-wrap" id="type-filters">
+        <button class="filter-btn active" data-type="all">ทั้งหมด</button>
+        <button class="filter-btn" data-type="national">อุทยานแห่งชาติ</button>
+        <button class="filter-btn" data-type="wildlife">เขตรักษาพันธุ์</button>
+        <button class="filter-btn" data-type="forest">วนอุทยาน</button>
+      </div>
+    </div>
+
+    <!-- Layer toggles -->
+    <div class="panel-section">
+      <h3>ชั้นข้อมูล</h3>
+      <div id="layer-list"></div>
+    </div>
+
+    <!-- Stats -->
+    <div class="panel-section">
+      <h3>สถิติ</h3>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="val" id="stat-parks">—</div>
+          <div class="lbl">อุทยานทั้งหมด</div>
+        </div>
+        <div class="stat-card">
+          <div class="val" id="stat-area">—</div>
+          <div class="lbl">ล้านไร่</div>
+        </div>
+        <div class="stat-card">
+          <div class="val" id="stat-province">—</div>
+          <div class="lbl">จังหวัด</div>
+        </div>
+        <div class="stat-card">
+          <div class="val" id="stat-layers">—</div>
+          <div class="lbl">ชั้นข้อมูล</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feature info -->
+    <div id="feature-info">
+      <div class="info-placeholder">
+        🖱️ คลิกที่พื้นที่บนแผนที่<br/>เพื่อดูรายละเอียดข้อมูล
+      </div>
+    </div>
+
+  </div><!-- /panel -->
+
+  <!-- Map -->
+  <div id="map"></div>
+
+</div><!-- /app -->
+
+<script>
+// ══════════════════════════════════════════════════════════════
+//  CONFIG — แก้ค่านี้ให้ตรงกับ Supabase ของคุณ
+// ══════════════════════════════════════════════════════════════
+const CONFIG = {
+  supabaseUrl:  'https://YOUR_PROJECT.supabase.co',
+  supabaseKey:  'YOUR_ANON_KEY',
+  storageBase:  'https://YOUR_PROJECT.supabase.co/storage/v1/object/public/park-tiles/tiles/',
+
+  // รายการ layers (เพิ่มตามชื่อไฟล์ shapefile ที่มี)
+  layers: [
+    { id: 'park_boundaries', label: 'เขตอุทยานแห่งชาติ', color: '#3fb950', opacity: 0.35 },
+    { id: 'wildlife_sanctuary', label: 'เขตรักษาพันธุ์สัตว์ป่า', color: '#d29922', opacity: 0.35 },
+    { id: 'forest_reserve',    label: 'ป่าสงวนแห่งชาติ',         color: '#39d0a8', opacity: 0.25 },
+  ],
+};
+
+// ── ลงทะเบียน PMTiles Protocol ────────────────────────────────
+const protocol = new pmtiles.Protocol();
+maplibregl.addProtocol('pmtiles', protocol.tile);
+
+// ── สร้าง Map ─────────────────────────────────────────────────
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    sources: {
+      'base': {
+        type: 'raster',
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        attribution: '© OpenStreetMap contributors',
+      }
+    },
+    layers: [{
+      id: 'background',
+      type: 'raster',
+      source: 'base',
+      paint: { 'raster-opacity': 0.5 },
+    }],
+  },
+  center: [101.0, 13.5],
+  zoom: 6,
+  minZoom: 5,
+  maxZoom: 18,
+});
+
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
+map.addControl(new maplibregl.FullscreenControl(), 'top-right');
+
+// ── State ─────────────────────────────────────────────────────
+const layerState = {};
+CONFIG.layers.forEach(l => layerState[l.id] = true);
+
+// ── โหลด PMTiles Layers ───────────────────────────────────────
+map.on('load', () => {
+  buildLayerList();
+  loadAllLayers();
+  fetchStats();
+  setupInteractions();
+  hideLoading();
+});
+
+function loadAllLayers() {
+  CONFIG.layers.forEach(layer => {
+    const pmtilesUrl = `pmtiles://${CONFIG.storageBase}${layer.id}.pmtiles`;
+
+    // เพิ่ม source
+    if (!map.getSource(layer.id)) {
+      map.addSource(layer.id, {
+        type: 'vector',
+        url: pmtilesUrl,
+      });
+    }
+
+    // Fill layer
+    map.addLayer({
+      id: `${layer.id}-fill`,
+      type: 'fill',
+      source: layer.id,
+      'source-layer': layer.id,
+      paint: {
+        'fill-color': layer.color,
+        'fill-opacity': layer.opacity,
+      },
+    });
+
+    // Outline layer
+    map.addLayer({
+      id: `${layer.id}-line`,
+      type: 'line',
+      source: layer.id,
+      'source-layer': layer.id,
+      paint: {
+        'line-color': layer.color,
+        'line-width': 1.2,
+        'line-opacity': 0.8,
+      },
+    });
+
+    // Hover highlight
+    map.addLayer({
+      id: `${layer.id}-hover`,
+      type: 'fill',
+      source: layer.id,
+      'source-layer': layer.id,
+      paint: {
+        'fill-color': '#fff',
+        'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.15, 0],
+      },
+    });
+  });
+}
+
+// ── Build Layer List UI ───────────────────────────────────────
+function buildLayerList() {
+  const container = document.getElementById('layer-list');
+  CONFIG.layers.forEach(layer => {
+    const el = document.createElement('div');
+    el.className = 'layer-item';
+    el.innerHTML = `
+      <div class="layer-dot" style="background:${layer.color}"></div>
+      <span class="layer-label">${layer.label}</span>
+      <div class="toggle on" data-layer="${layer.id}"></div>
+    `;
+    el.querySelector('.toggle').addEventListener('click', (e) => {
+      const layerId = e.target.dataset.layer;
+      const isOn = layerState[layerId];
+      layerState[layerId] = !isOn;
+      e.target.classList.toggle('on', !isOn);
+      const vis = isOn ? 'none' : 'visible';
+      [`${layerId}-fill`, `${layerId}-line`, `${layerId}-hover`].forEach(id => {
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis);
+      });
+    });
+    container.appendChild(el);
+  });
+}
+
+// ── Fetch Stats จาก Supabase ──────────────────────────────────
+async function fetchStats() {
+  try {
+    const headers = {
+      'apikey': CONFIG.supabaseKey,
+      'Authorization': `Bearer ${CONFIG.supabaseKey}`,
+    };
+
+    const res = await fetch(
+      `${CONFIG.supabaseUrl}/rest/v1/park_boundaries?select=id,province,area_rai`,
+      { headers }
+    );
+    const data = await res.json();
+
+    if (Array.isArray(data)) {
+      const provinces = new Set(data.map(r => r.province).filter(Boolean));
+      const totalRai  = data.reduce((s, r) => s + (r.area_rai || 0), 0);
+
+      document.getElementById('stat-parks').textContent    = data.length.toLocaleString();
+      document.getElementById('stat-area').textContent     = (totalRai / 1e6).toFixed(1);
+      document.getElementById('stat-province').textContent = provinces.size;
+      document.getElementById('stat-layers').textContent   = CONFIG.layers.length;
+    }
+  } catch (e) {
+    console.warn('Stats fetch error:', e);
+    document.getElementById('stat-parks').textContent    = '—';
+  }
+}
+
+// ── Interactions ──────────────────────────────────────────────
+let hoveredId   = null;
+let hoveredSrc  = null;
+
+function setupInteractions() {
+  const fillLayerIds = CONFIG.layers.map(l => `${l.id}-fill`);
+
+  // Hover
+  map.on('mousemove', fillLayerIds, (e) => {
+    if (!e.features.length) return;
+    map.getCanvas().style.cursor = 'pointer';
+
+    const feat = e.features[0];
+    const srcId = feat.layer.source;
+
+    if (hoveredId !== null && hoveredSrc) {
+      map.setFeatureState({ source: hoveredSrc, sourceLayer: hoveredSrc, id: hoveredId }, { hover: false });
+    }
+    hoveredId  = feat.id;
+    hoveredSrc = srcId;
+    map.setFeatureState({ source: srcId, sourceLayer: srcId, id: feat.id }, { hover: true });
+  });
+
+  map.on('mouseleave', fillLayerIds, () => {
+    map.getCanvas().style.cursor = '';
+    if (hoveredId !== null && hoveredSrc) {
+      map.setFeatureState({ source: hoveredSrc, sourceLayer: hoveredSrc, id: hoveredId }, { hover: false });
+      hoveredId = null;
+    }
+  });
+
+  // Click → show properties
+  map.on('click', fillLayerIds, (e) => {
+    const feat = e.features[0];
+    showFeatureInfo(feat.properties);
+  });
+
+  // Zoom badge
+  map.on('zoom', () => {
+    document.getElementById('zoom-badge').textContent = `Zoom: ${map.getZoom().toFixed(1)}`;
+  });
+
+  // Coord badge
+  map.on('mousemove', (e) => {
+    const { lng, lat } = e.lngLat;
+    document.getElementById('coord-badge').textContent =
+      `${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E`;
+  });
+
+  // Search
+  const searchEl = document.getElementById('search');
+  searchEl.addEventListener('input', debounce(async (e) => {
+    const q = e.target.value.trim();
+    if (!q) return;
+    await searchParks(q);
+  }, 400));
+
+  // Type filters
+  document.getElementById('type-filters').addEventListener('click', (e) => {
+    if (!e.target.matches('.filter-btn')) return;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    e.target.classList.add('active');
+    filterByType(e.target.dataset.type);
+  });
+}
+
+// ── แสดง Feature Info ─────────────────────────────────────────
+function showFeatureInfo(props) {
+  const container = document.getElementById('feature-info');
+  const name = props.park_name || props.name || props.NAME || 'ไม่ระบุชื่อ';
+
+  let html = `<div class="info-title">🌿 ${name}</div>`;
+
+  const skipKeys = ['geom', 'geometry', 'shape_leng', 'shape_area', 'fid', 'FID'];
+  const entries  = Object.entries(props).filter(([k]) => !skipKeys.includes(k));
+
+  for (const [key, val] of entries) {
+    if (val === null || val === undefined || val === '') continue;
+    const dispVal = typeof val === 'number' && val > 1000
+      ? val.toLocaleString('th-TH', { maximumFractionDigits: 2 })
+      : val;
+    html += `
+      <div class="prop-row">
+        <span class="prop-key">${key}</span>
+        <span class="prop-val">${dispVal}</span>
+      </div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+// ── Search ────────────────────────────────────────────────────
+async function searchParks(query) {
+  try {
+    const headers = { 'apikey': CONFIG.supabaseKey, 'Authorization': `Bearer ${CONFIG.supabaseKey}` };
+    const url = `${CONFIG.supabaseUrl}/rest/v1/park_boundaries?park_name=ilike.*${encodeURIComponent(query)}*&select=park_name,province,geom&limit=5`;
+    const res  = await fetch(url, { headers });
+    const data = await res.json();
+
+    if (data.length > 0 && data[0].geom) {
+      console.log(`ค้นพบ ${data.length} รายการ`);
+      // TODO: fly to first result
+    }
+  } catch (e) { console.warn(e); }
+}
+
+// ── Filter by type ────────────────────────────────────────────
+function filterByType(type) {
+  CONFIG.layers.forEach(layer => {
+    const vis = (type === 'all' || layer.id.includes(type)) ? 'visible' : 'none';
+    [`${layer.id}-fill`, `${layer.id}-line`].forEach(id => {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis);
+    });
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────
+function hideLoading() {
+  setTimeout(() => {
+    document.getElementById('loading').classList.add('hidden');
+  }, 800);
+}
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+</script>
+</body>
+</html>
